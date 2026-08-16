@@ -1,0 +1,14 @@
+# ESP-IDF Build directories
+/build/
+/managed_components/
+dependencies.lock
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local configuration override
+sdkconfig.old
+sdkconfig
