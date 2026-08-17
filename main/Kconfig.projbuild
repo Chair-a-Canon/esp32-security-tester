@@ -1,0 +1,11 @@
+config TOOL_WIFI_SSID
+    string "WiFi SSID"
+    default "Baremma"
+    help
+        SSID for the security tool Wi-Fi connection.
+
+config TOOL_WIFI_PASSWORD
+    string "WiFi Password"
+    default "James+Claire1989"
+    help
+        Password for the security tool Wi-Fi connection.
