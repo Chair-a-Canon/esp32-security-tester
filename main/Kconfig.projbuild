@@ -1,6 +1,6 @@
 config TOOL_WIFI_SSID
     string "WiFi SSID"
-    default "Baremma"
+    default "Baremma2"
     help
         SSID for the security tool Wi-Fi connection.
 

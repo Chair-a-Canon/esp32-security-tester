@@ -11,8 +11,6 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-#define EXAMPLE_ESP_WIFI_SSID      "Baremma"
-#define EXAMPLE_ESP_WIFI_PASS      "YOUR_WIFI_PASSWORD" // Replace with your AP password
 #define EXAMPLE_ESP_MAXIMUM_RETRY  5
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -28,18 +26,27 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disconnect = (wifi_event_sta_disconnected_t *)event_data;
+        
+        // Log the exact reason code given by the AP for diagnosis
+        ESP_LOGW(TAG, "Disconnected from AP. Reason code: %d", disconnect->reason);
+        
+        // Common reason codes:
+        // 2  = WIFI_REASON_AUTH_EXPIRE
+        // 15 = WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT (Usually incorrect password!)
+        // 201 = WIFI_REASON_NO_AP_FOUND (SSID does not exist or out of range)
+
         if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
+            ESP_LOGI(TAG, "retry to connect to the AP (%d/%d)", s_retry_num, EXAMPLE_ESP_MAXIMUM_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            ESP_LOGE(TAG, "Max retries reached. Failed to connect to SSID: %s", CONFIG_TOOL_WIFI_SSID);
         }
-        ESP_LOGI(TAG, "connect to the AP fail");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        // ESP_LOGI(TAG, "got ip:" IPSTR, IP2XSTR(&event->ip_info.ip));
-		ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -71,8 +78,8 @@ void wifi_init_sta(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = EXAMPLE_ESP_WIFI_SSID,
-            .password = EXAMPLE_ESP_WIFI_PASS,
+            .ssid = CONFIG_TOOL_WIFI_SSID,
+            .password = CONFIG_TOOL_WIFI_PASSWORD,
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
@@ -80,5 +87,5 @@ void wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_LOGI(TAG, "wifi_init_sta finished. Attempting connection to SSID: %s", CONFIG_TOOL_WIFI_SSID);
 }
