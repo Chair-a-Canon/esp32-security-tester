@@ -6,6 +6,6 @@ config TOOL_WIFI_SSID
 
 config TOOL_WIFI_PASSWORD
     string "WiFi Password"
-    default "James+Claire1989"
+    default ""
     help
         Password for the security tool Wi-Fi connection.
