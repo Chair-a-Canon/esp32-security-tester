@@ -1,11 +1,10 @@
-config TOOL_WIFI_SSID
-    string "WiFi SSID"
-    default "Baremma2"
+config TOOL_AP_SSID
+    string "Setup SoftAP SSID"
+    default "ESP32-Injector-Setup"
     help
-        SSID for the security tool Wi-Fi connection.
-
-config TOOL_WIFI_PASSWORD
-    string "WiFi Password"
-    default ""
-    help
-        Password for the security tool Wi-Fi connection.
+        SSID for the device's own open setup access point. Connect to
+        this network first to reach the web UI, then use its Wi-Fi
+        scan/connect panel to join your actual target network. No
+        target-network credentials are ever baked into firmware - this
+        is the only Wi-Fi identifier configured at build time, and it
+        has no password.
