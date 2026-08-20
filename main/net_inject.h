@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,13 @@ void packet_injection_task(void *pvParameters);
 // errors, ESP_OK if the packet was sent (regardless of whether a response
 // was captured - check result->responded for that).
 esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result_t *result);
+
+// Same behavior as inject_custom_packet_from_json(), but takes an
+// already-parsed cJSON object instead of a raw string - used by campaign
+// mode to run a batch of packets from one parsed JSON array without a
+// re-parse/re-stringify round trip per packet. Caller retains ownership
+// of `root` (it is read but never freed here).
+esp_err_t inject_custom_packet_from_cjson(cJSON *root, inject_result_t *result);
 
 #ifdef __cplusplus
 }

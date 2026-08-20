@@ -18,6 +18,7 @@
 #include "wifi_sta.h"
 #include "net_inject.h"
 #include "scope.h"
+#include "campaign.h"
 
 static const char *TAG = "main";
 
@@ -64,6 +65,19 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "        .success { background: #2ecc71; color: #fff; }"
         "        .error { background: #e74c3c; color: #fff; }"
         "        #scopeLabel { text-align: center; font-size: 0.85rem; margin-bottom: 10px; color: #ffcb6b; }"
+        "        fieldset.campaign-panel { border-color: #c792ea; }"
+        "        fieldset.campaign-panel legend { color: #c792ea; }"
+        "        #campaignQueue { margin-top: 8px; }"
+        "        .queue-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin-top: 6px; background: #151821; border: 1px solid #3f4451; border-radius: 4px; font-size: 0.8rem; }"
+        "        .queue-item button { width: auto; padding: 4px 10px; margin: 0; font-size: 0.75rem; background: #e74c3c; }"
+        "        .queue-empty { font-size: 0.8rem; color: #7f8c8d; margin-top: 8px; }"
+        "        button.campaign-btn { background: #c792ea; color: #1e222d; }"
+        "        button.campaign-stop-btn { background: #e74c3c; }"
+        "        #delay_ms_label { display: flex; justify-content: space-between; }"
+        "        #campaignResults { margin-top: 10px; font-size: 0.8rem; }"
+        "        .result-line { padding: 6px 8px; margin-top: 4px; border-radius: 4px; background: #151821; border: 1px solid #3f4451; }"
+        "        .result-line.responded { border-color: #2ecc71; }"
+        "        #campaignSummary { margin-top: 10px; padding: 10px; text-align: center; font-weight: bold; border-radius: 4px; display: none; }"
         "    </style>"
         "    <script>"
         "        function setPort(elementId, port) {"
@@ -212,6 +226,103 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "                console.error('Error:', error);"
         "            });"
         "        }"
+        "        let campaignQueue = [];"
+        "        let campaignPollTimer = null;"
+        "        function readPacketForm() {"
+        "            const form = document.getElementById('injectForm');"
+        "            const formData = new FormData(form);"
+        "            const data = {};"
+        "            formData.forEach((value, key) => { data[key] = value; });"
+        "            const checkboxes = ['flag_syn', 'flag_ack', 'flag_fin', 'flag_rst', 'flag_psh', 'flag_urg', 'flag_ece', 'flag_cwr'];"
+        "            checkboxes.forEach(box => { data[box] = form.elements[box].checked; });"
+        "            return data;"
+        "        }"
+        "        function renderCampaignQueue() {"
+        "            const div = document.getElementById('campaignQueue');"
+        "            if (campaignQueue.length === 0) {"
+        "                div.innerHTML = '<div class=\\\"queue-empty\\\">No packets queued yet - use \\\"Add to Campaign\\\" above.</div>';"
+        "            } else {"
+        "                div.innerHTML = '';"
+        "                campaignQueue.forEach((pkt, idx) => {"
+        "                    const item = document.createElement('div');"
+        "                    item.className = 'queue-item';"
+        "                    item.innerHTML = '<span>#' + (idx + 1) + ' ' + pkt.proto.toUpperCase() + ' -&gt; ' + pkt.dst_ip + ':' + pkt.dst_port + '</span>';"
+        "                    const btn = document.createElement('button');"
+        "                    btn.type = 'button';"
+        "                    btn.innerText = 'Remove';"
+        "                    btn.onclick = () => { campaignQueue.splice(idx, 1); renderCampaignQueue(); };"
+        "                    item.appendChild(btn);"
+        "                    div.appendChild(item);"
+        "                });"
+        "            }"
+        "            document.getElementById('runCampaignBtn').disabled = campaignQueue.length === 0;"
+        "        }"
+        "        function addToCampaign() {"
+        "            campaignQueue.push(readPacketForm());"
+        "            renderCampaignQueue();"
+        "        }"
+        "        function setCampaignRunningUi(running) {"
+        "            document.getElementById('runCampaignBtn').disabled = running || campaignQueue.length === 0;"
+        "            document.getElementById('stopCampaignBtn').style.display = running ? 'block' : 'none';"
+        "            document.getElementById('injectBtn').disabled = running;"
+        "            document.getElementById('scope_cidr').disabled = running;"
+        "            document.getElementById('scope_ack').disabled = running;"
+        "        }"
+        "        function runCampaign() {"
+        "            if (campaignQueue.length === 0) return;"
+        "            const delayMs = document.getElementById('delay_ms').value;"
+        "            const summaryDiv = document.getElementById('campaignSummary');"
+        "            summaryDiv.style.display = 'none';"
+        "            document.getElementById('campaignResults').innerHTML = '';"
+        "            fetch('/campaign/start', {"
+        "                method: 'POST',"
+        "                headers: { 'Content-Type': 'application/json' },"
+        "                body: JSON.stringify({ delay_ms: delayMs, packets: campaignQueue })"
+        "            })"
+        "            .then(response => response.json().then(body => ({ ok: response.ok, body })))"
+        "            .then(({ ok, body }) => {"
+        "                if (!ok) {"
+        "                    summaryDiv.style.display = 'block';"
+        "                    summaryDiv.className = 'error';"
+        "                    summaryDiv.innerText = body.message;"
+        "                    return;"
+        "                }"
+        "                setCampaignRunningUi(true);"
+        "                campaignPollTimer = setInterval(pollCampaignStatus, 500);"
+        "            })"
+        "            .catch(() => {"
+        "                summaryDiv.style.display = 'block';"
+        "                summaryDiv.className = 'error';"
+        "                summaryDiv.innerText = 'Failed to start campaign - connection failed.';"
+        "            });"
+        "        }"
+        "        function stopCampaign() {"
+        "            fetch('/campaign/stop', { method: 'POST' });"
+        "        }"
+        "        function pollCampaignStatus() {"
+        "            fetch('/campaign/status').then(r => r.json()).then(body => {"
+        "                const resultsDiv = document.getElementById('campaignResults');"
+        "                resultsDiv.innerHTML = '';"
+        "                (body.results || []).forEach(res => {"
+        "                    const line = document.createElement('div');"
+        "                    line.className = 'result-line' + (res.responded ? ' responded' : '');"
+        "                    line.innerText = 'Packet #' + res.packet_id + ': ' + (res.responded ? 'Responded' : 'No response') + ' - ' + res.response;"
+        "                    resultsDiv.appendChild(line);"
+        "                });"
+        "                document.getElementById('campaignProgress').innerText = 'Progress: ' + body.current_index + ' / ' + body.total;"
+        "                if (!body.active) {"
+        "                    clearInterval(campaignPollTimer);"
+        "                    setCampaignRunningUi(false);"
+        "                    const summaryDiv = document.getElementById('campaignSummary');"
+        "                    summaryDiv.style.display = 'block';"
+        "                    summaryDiv.className = 'success';"
+        "                    summaryDiv.innerText = (body.aborted ? 'Stopped early - ' : 'Campaign complete - ') +"
+        "                        body.sent_count + ' sent, ' + body.responded_count + ' responded.';"
+        "                    campaignQueue = [];"
+        "                    renderCampaignQueue();"
+        "                }"
+        "            }).catch(() => { clearInterval(campaignPollTimer); setCampaignRunningUi(false); });"
+        "        }"
         "    </script>"
         "</head>"
         "<body>"
@@ -356,8 +467,22 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "        </fieldset>"
 
         "        <button type=\"submit\" id=\"injectBtn\" disabled>Inject Packet</button>"
+        "        <button type=\"button\" class=\"campaign-btn\" onclick=\"addToCampaign()\">Add to Campaign</button>"
         "        <div id=\"status\"></div>"
         "    </form>"
+
+        "    <fieldset class=\"campaign-panel\">"
+        "        <legend>Campaign</legend>"
+        "        <div class=\"hint\">Queue packets with \"Add to Campaign\" above (using whatever's currently filled in the form), then run them in sequence. Scope cannot be changed and one-off injection is locked while a campaign runs.</div>"
+        "        <div id=\"campaignQueue\"><div class=\"queue-empty\">No packets queued yet - use \"Add to Campaign\" above.</div></div>"
+        "        <label id=\"delay_ms_label\" for=\"delay_ms\"><span>Delay between packets (ms):</span><span id=\"delay_ms_value\">1000</span></label>"
+        "        <input type=\"range\" id=\"delay_ms\" min=\"100\" max=\"5000\" step=\"100\" value=\"1000\" oninput=\"document.getElementById('delay_ms_value').innerText = this.value\">"
+        "        <button type=\"button\" class=\"campaign-btn\" id=\"runCampaignBtn\" onclick=\"runCampaign()\" disabled>Run Campaign</button>"
+        "        <button type=\"button\" class=\"campaign-stop-btn\" id=\"stopCampaignBtn\" onclick=\"stopCampaign()\" style=\"display:none;\">Stop Campaign</button>"
+        "        <div id=\"campaignProgress\" class=\"hint\"></div>"
+        "        <div id=\"campaignResults\"></div>"
+        "        <div id=\"campaignSummary\"></div>"
+        "    </fieldset>"
         "</body>"
         "</html>";
 
@@ -502,6 +627,13 @@ static esp_err_t wifi_connect_post_handler(httpd_req_t *req) {
 // POST /scope - sets and arms the authorization scope for this session.
 // { "cidr": "192.168.1.0/24", "ack": true }
 static esp_err_t scope_post_handler(httpd_req_t *req) {
+    if (campaign_is_active()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Cannot change scope while a campaign is active - stop the campaign first\"}");
+        return ESP_OK;
+    }
+
     char content[256];
     size_t recv_size = (req->content_len < sizeof(content) - 1) ? req->content_len : sizeof(content) - 1;
 
@@ -552,6 +684,13 @@ static esp_err_t scope_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t inject_post_handler(httpd_req_t *req) {
+    if (campaign_is_active()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"A campaign is currently running - one-off injection is locked out until it finishes\"}");
+        return ESP_OK;
+    }
+
     char content[1024];
     size_t recv_size = (req->content_len < sizeof(content) - 1) ? req->content_len : sizeof(content) - 1;
 
@@ -594,6 +733,117 @@ static esp_err_t inject_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// POST /campaign/start - queues and starts a sequenced campaign.
+// { "delay_ms": 1000, "packets": [ {...same fields as /inject...}, ... ] }
+// Returns immediately (does not block for the whole campaign) - poll
+// GET /campaign/status for progress.
+static esp_err_t campaign_start_post_handler(httpd_req_t *req) {
+    // Campaigns can carry many packets, so use a larger recv buffer than
+    // the single-packet /inject handler.
+    char *content = malloc(8192);
+    if (content == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int total_read = 0;
+    int remaining = req->content_len < 8191 ? req->content_len : 8191;
+    while (remaining > 0) {
+        int ret = httpd_req_recv(req, content + total_read, remaining);
+        if (ret <= 0) {
+            free(content);
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                httpd_resp_send_408(req);
+            }
+            return ESP_FAIL;
+        }
+        total_read += ret;
+        remaining -= ret;
+    }
+    content[total_read] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    free(content);
+
+    httpd_resp_set_type(req, "application/json");
+
+    if (root == NULL) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+        return ESP_OK;
+    }
+
+    int total = 0;
+    esp_err_t result = campaign_start(root, &total);
+
+    if (result == ESP_OK) {
+        // Ownership of `root` has transferred to the campaign task - do not delete it here.
+        char resp[128];
+        snprintf(resp, sizeof(resp), "{\"status\":\"started\",\"total\":%d}", total);
+        httpd_resp_sendstr(req, resp);
+    } else {
+        cJSON_Delete(root);
+        httpd_resp_set_status(req, result == ESP_ERR_INVALID_STATE ? "409 Conflict" : "400 Bad Request");
+        char resp[256];
+        if (result == ESP_ERR_INVALID_STATE) {
+            snprintf(resp, sizeof(resp), "{\"status\":\"error\",\"message\":\"A campaign is already active\"}");
+        } else {
+            snprintf(resp, sizeof(resp),
+                "{\"status\":\"error\",\"message\":\"Invalid campaign - 'packets' must be a non-empty array "
+                "of at most %d packets, and delay_ms (if present) must be a non-negative number\"}",
+                CAMPAIGN_MAX_PACKETS);
+        }
+        httpd_resp_sendstr(req, resp);
+    }
+    return ESP_OK;
+}
+
+// GET /campaign/status - live progress for the running (or just-finished) campaign.
+static esp_err_t campaign_status_get_handler(httpd_req_t *req) {
+    campaign_summary_t summary = {0};
+    inject_result_t results[CAMPAIGN_MAX_PACKETS];
+    int n = campaign_get_status(&summary, results, CAMPAIGN_MAX_PACKETS);
+
+    // Rough size budget: fixed fields + up to CAMPAIGN_MAX_PACKETS result entries.
+    char *resp = malloc(512 + (size_t)n * (INJECT_RESPONSE_SUMMARY_LEN + 64));
+    if (resp == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int off = snprintf(resp, 512,
+        "{\"active\":%s,\"complete\":%s,\"aborted\":%s,"
+        "\"current_index\":%d,\"total\":%d,"
+        "\"sent_count\":%" PRIu32 ",\"responded_count\":%" PRIu32 ",\"results\":[",
+        summary.active ? "true" : "false",
+        summary.complete ? "true" : "false",
+        summary.was_aborted ? "true" : "false",
+        summary.current_index, summary.total,
+        summary.sent_count, summary.responded_count);
+
+    for (int i = 0; i < n; i++) {
+        off += snprintf(resp + off, INJECT_RESPONSE_SUMMARY_LEN + 64,
+            "%s{\"packet_id\":%" PRIu32 ",\"responded\":%s,\"response\":\"%s\"}",
+            i == 0 ? "" : ",",
+            results[i].packet_id, results[i].responded ? "true" : "false",
+            results[i].response_summary);
+    }
+    off += snprintf(resp + off, 3, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    free(resp);
+    return ESP_OK;
+}
+
+// POST /campaign/stop - requests the active campaign abort after its current packet.
+static esp_err_t campaign_stop_post_handler(httpd_req_t *req) {
+    campaign_stop();
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Stop requested - campaign will halt after the current packet\"}");
+    return ESP_OK;
+}
+
 static const httpd_uri_t root_uri = {
     .uri = "/", .method = HTTP_GET, .handler = root_get_handler, .user_ctx = NULL
 };
@@ -612,12 +862,21 @@ static const httpd_uri_t scope_uri = {
 static const httpd_uri_t inject_uri = {
     .uri = "/inject", .method = HTTP_POST, .handler = inject_post_handler, .user_ctx = NULL
 };
+static const httpd_uri_t campaign_start_uri = {
+    .uri = "/campaign/start", .method = HTTP_POST, .handler = campaign_start_post_handler, .user_ctx = NULL
+};
+static const httpd_uri_t campaign_status_uri = {
+    .uri = "/campaign/status", .method = HTTP_GET, .handler = campaign_status_get_handler, .user_ctx = NULL
+};
+static const httpd_uri_t campaign_stop_uri = {
+    .uri = "/campaign/stop", .method = HTTP_POST, .handler = campaign_stop_post_handler, .user_ctx = NULL
+};
 
 static httpd_handle_t start_webserver(void) {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 12;
     config.max_resp_headers = 8;
     // Packet-crafting handlers use several hundred bytes of stack for
     // header/checksum buffers on top of the JSON parse buffer - the
@@ -633,6 +892,9 @@ static httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server, &wifi_connect_uri);
         httpd_register_uri_handler(server, &scope_uri);
         httpd_register_uri_handler(server, &inject_uri);
+        httpd_register_uri_handler(server, &campaign_start_uri);
+        httpd_register_uri_handler(server, &campaign_status_uri);
+        httpd_register_uri_handler(server, &campaign_stop_uri);
         return server;
     }
 
@@ -649,6 +911,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     scope_init(); // RAM-only, unarmed until POST /scope with ack=true
+    campaign_init();
 
     ESP_LOGI(TAG, "Initializing Wi-Fi (AP+STA)...");
     wifi_manager_init(); // brings up the open setup SoftAP; no auto-connect

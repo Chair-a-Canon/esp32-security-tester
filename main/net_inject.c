@@ -548,6 +548,21 @@ static esp_err_t send_raw_icmp_echo(uint32_t dst_ip_host, uint8_t ttl,
 
 esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result_t *result)
 {
+    cJSON *root = cJSON_Parse(json_payload);
+    if (root == NULL) {
+        memset(result, 0, sizeof(*result));
+        result->packet_id = next_packet_id();
+        ESP_LOGE(TAG, "[pkt #%" PRIu32 "] Failed to parse JSON injection payload", result->packet_id);
+        return ESP_FAIL;
+    }
+
+    esp_err_t ret = inject_custom_packet_from_cjson(root, result);
+    cJSON_Delete(root);
+    return ret;
+}
+
+esp_err_t inject_custom_packet_from_cjson(cJSON *root, inject_result_t *result)
+{
     memset(result, 0, sizeof(*result));
     result->packet_id = next_packet_id();
 
@@ -555,12 +570,6 @@ esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result
         ESP_LOGW(TAG, "[pkt #%" PRIu32 "] Injection blocked: no authorization scope is armed. "
                        "POST /scope first.", result->packet_id);
         return ESP_ERR_INVALID_STATE;
-    }
-
-    cJSON *root = cJSON_Parse(json_payload);
-    if (root == NULL) {
-        ESP_LOGE(TAG, "[pkt #%" PRIu32 "] Failed to parse JSON injection payload", result->packet_id);
-        return ESP_FAIL;
     }
 
     cJSON *j_proto = cJSON_GetObjectItem(root, "proto");
@@ -582,14 +591,12 @@ esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result
         strncpy(dip_str, j_dip->valuestring, sizeof(dip_str) - 1);
     } else {
         ESP_LOGE(TAG, "[pkt #%" PRIu32 "] Missing required dst_ip field", result->packet_id);
-        cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
 
     struct in_addr dip_addr;
     if (inet_pton(AF_INET, dip_str, &dip_addr) != 1) {
         ESP_LOGE(TAG, "[pkt #%" PRIu32 "] Invalid dst_ip: %s", result->packet_id, dip_str);
-        cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
     uint32_t dst_ip_host = ntohl(dip_addr.s_addr);
@@ -597,7 +604,6 @@ esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result
     if (!scope_contains(dst_ip_host)) {
         ESP_LOGW(TAG, "[pkt #%" PRIu32 "] Injection BLOCKED: %s is outside the armed scope",
                  result->packet_id, dip_str);
-        cJSON_Delete(root);
         return ESP_ERR_NOT_ALLOWED;
     }
 
@@ -605,7 +611,6 @@ esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result
     if (wifi_sta_get_ip(&src_ip_host) != ESP_OK) {
         ESP_LOGE(TAG, "[pkt #%" PRIu32 "] Could not determine device IP for source address",
                  result->packet_id);
-        cJSON_Delete(root);
         return ESP_FAIL;
     }
 
@@ -643,6 +648,5 @@ esp_err_t inject_custom_packet_from_json(const char *json_payload, inject_result
         send_result = ESP_ERR_INVALID_ARG;
     }
 
-    cJSON_Delete(root);
     return send_result;
 }
